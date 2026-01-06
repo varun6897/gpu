@@ -1,0 +1,49 @@
+pipeline:
+  image:
+    repository: gpu-telemetry-pipeline
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  # Default to 0 as the new architecture prefers separate streamer/collector.
+  replicaCount: 0
+
+api:
+  image:
+    repository: gpu-telemetry-api
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+
+mqBroker:
+  image:
+    repository: gpu-telemetry-mqbroker
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  queueCapacity: 1000
+
+streamer:
+  image:
+    repository: gpu-telemetry-streamer
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  sleepMillis: 100
+
+collector:
+  image:
+    repository: gpu-telemetry-collector
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  workers: 4
+
+postgres:
+  image: postgres:16
+  username: gpu
+  password: gpu-password
+  database: gpu
+  port: 5432
+
+resources: {}
+
+

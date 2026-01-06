@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-mq
+spec:
+  replicas: {{ .Values.mqBroker.replicaCount }}
+  selector:
+    matchLabels:
+      app: telemetry-mq
+  template:
+    metadata:
+      labels:
+        app: telemetry-mq
+    spec:
+      containers:
+        - name: mqbroker
+          image: "{{ .Values.mqBroker.image.repository }}:{{ .Values.mqBroker.image.tag }}"
+          imagePullPolicy: {{ .Values.mqBroker.image.pullPolicy }}
+          env:
+            - name: QUEUE_CAPACITY
+              value: "{{ .Values.mqBroker.queueCapacity }}"
+          ports:
+            - containerPort: 8081
+
+

@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-streamer
+spec:
+  replicas: {{ .Values.streamer.replicaCount }}
+  selector:
+    matchLabels:
+      app: telemetry-streamer
+  template:
+    metadata:
+      labels:
+        app: telemetry-streamer
+    spec:
+      containers:
+        - name: streamer
+          image: "{{ .Values.streamer.image.repository }}:{{ .Values.streamer.image.tag }}"
+          imagePullPolicy: {{ .Values.streamer.image.pullPolicy }}
+          env:
+            - name: POSTGRES_DSN
+              value: "postgres://{{ .Values.postgres.username }}:{{ .Values.postgres.password }}@telemetry-postgres:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}?sslmode=disable"
+            - name: MQ_BASE_URL
+              value: "http://telemetry-mq:8081"
+            - name: STREAMER_SLEEP_MILLIS
+              value: "{{ .Values.streamer.sleepMillis }}"
+          ports:
+            - containerPort: 8080
+
+

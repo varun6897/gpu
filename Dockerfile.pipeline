@@ -1,0 +1,25 @@
+## Multi-stage build for the telemetry pipeline (streamer + collector).
+
+FROM golang:1.24 AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/pipeline ./cmd/pipeline
+
+FROM gcr.io/distroless/base-debian12
+
+WORKDIR /app
+
+COPY --from=builder /bin/pipeline /bin/pipeline
+COPY dcgm_metrics_20250718_134233.csv /data/dcgm_metrics_20250718_134233.csv
+
+ENV CSV_PATH=/data/dcgm_metrics_20250718_134233.csv
+
+ENTRYPOINT ["/bin/pipeline"]
+
+

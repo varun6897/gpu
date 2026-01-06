@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-api
+spec:
+  type: ClusterIP
+  selector:
+    app: telemetry-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+
+

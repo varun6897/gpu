@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-collector
+spec:
+  replicas: {{ .Values.collector.replicaCount }}
+  selector:
+    matchLabels:
+      app: telemetry-collector
+  template:
+    metadata:
+      labels:
+        app: telemetry-collector
+    spec:
+      containers:
+        - name: collector
+          image: "{{ .Values.collector.image.repository }}:{{ .Values.collector.image.tag }}"
+          imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+          env:
+            - name: MQ_BASE_URL
+              value: "http://telemetry-mq:8081"
+            - name: POSTGRES_DSN
+              value: "postgres://{{ .Values.postgres.username }}:{{ .Values.postgres.password }}@telemetry-postgres:{{ .Values.postgres.port }}/{{ .Values.postgres.database }}?sslmode=disable"
+            - name: COLLECTOR_WORKERS
+              value: "{{ .Values.collector.workers }}"
+
+

@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telemetry-postgres-init
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS telemetry (
+      id          BIGSERIAL PRIMARY KEY,
+      timestamp   TIMESTAMPTZ NOT NULL,
+      metric_name TEXT        NOT NULL,
+      gpu_id      TEXT        NOT NULL,
+      device      TEXT        NOT NULL,
+      uuid        TEXT        NOT NULL,
+      model_name  TEXT        NOT NULL,
+      hostname    TEXT        NOT NULL,
+      container   TEXT        NOT NULL,
+      pod         TEXT        NOT NULL,
+      namespace   TEXT        NOT NULL,
+      value       TEXT        NOT NULL,
+      labels_raw  TEXT        NOT NULL
+    );
+
+
