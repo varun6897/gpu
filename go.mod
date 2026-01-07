@@ -1,4 +1,4 @@
-module github.com/varunv/gpu
+module github.com/varun6897/gpu
 
 go 1.23.0
 
