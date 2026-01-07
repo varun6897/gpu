@@ -46,6 +46,23 @@ type Queue interface {
 	Close()
 }
 
+// AckQueue is an optional extension of Queue that supports explicit
+// acknowledgements for messages. Implementations typically provide
+// at-least-once delivery semantics by re-delivering messages that are
+// consumed but not acknowledged within some timeout window.
+//
+// Not all Queue implementations need to support this; callers can safely
+// type-assert to AckQueue and, if the assertion fails, fall back to
+// at-most-once behaviour.
+type AckQueue interface {
+	Queue
+
+	// Ack acknowledges successful processing of the message with the
+	// given ID. Implementations may use this to remove the message from
+	// in-flight tracking and prevent it from being re-delivered.
+	Ack(ctx context.Context, id string) error
+}
+
 var (
 	// ErrClosed is returned when operating on a closed queue.
 	ErrClosed = errors.New("mq: queue is closed")

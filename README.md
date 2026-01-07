@@ -6,11 +6,105 @@ The design follows the requirements in `GPU Telemetry Pipeline Message Queue.pdf
 
 ---
 
+## Getting Started (Step‑by‑Step)
+
+If you are a complete beginner, follow these steps in order.
+
+### 1. Install prerequisites
+
+- **Docker** – container runtime.
+- **kind** – Kubernetes in Docker.
+- **kubectl** – Kubernetes CLI.
+- **helm** – Kubernetes package manager.
+- **Go 1.23+** – only if you want to run tests or build binaries yourself.
+
+Install in this order: **Docker → kind → kubectl → helm → Go**.
+
+### 2. Clone this repository
+
+```bash
+mkdir -p ~/go/src/varunv
+cd ~/go/src/varunv
+git clone <this-repo-url> gpu
+cd gpu
+```
+
+### 3. (Optional) Run tests locally
+
+```bash
+go test ./api ./collector ./mq ./streamer -coverprofile=coverage.out
+go tool cover -func=coverage.out
+```
+
+### 4. Create a kind cluster
+
+```bash
+kind create cluster --name gpu
+kubectl config use-context kind-gpu
+kubectl get nodes
+```
+
+### 5. Build Docker images
+
+```bash
+docker build -f Dockerfile.mqbroker  -t gpu-telemetry-mqbroker:latest .
+docker build -f Dockerfile.streamer  -t gpu-telemetry-streamer:latest .
+docker build -f Dockerfile.collector -t gpu-telemetry-collector:latest .
+docker build -f Dockerfile.api       -t gpu-telemetry-api:latest .
+```
+
+### 6. Load images into the kind cluster
+
+```bash
+kind load docker-image gpu-telemetry-mqbroker:latest --name gpu
+kind load docker-image gpu-telemetry-streamer:latest  --name gpu
+kind load docker-image gpu-telemetry-collector:latest --name gpu
+kind load docker-image gpu-telemetry-api:latest       --name gpu
+```
+
+### 7. Install the Helm chart
+
+```bash
+helm upgrade --install telemetry-pipeline ./helm/telemetry-pipeline
+kubectl get pods
+```
+
+Wait until you see:
+
+- `telemetry-postgres` – database
+- `telemetry-mq` – message queue broker
+- `telemetry-streamer` – CSV streamer
+- `telemetry-collector` – collector
+- `telemetry-api` – HTTP API
+
+all in `Running` status.
+
+### 8. Explore the API
+
+```bash
+kubectl port-forward svc/telemetry-api 8080:80
+```
+
+Then in your browser:
+
+- Swagger UI: `http://localhost:8080/swagger`
+- OpenAPI JSON: `http://localhost:8080/openapi.json`
+
+In Swagger:
+
+1. Call `GET /api/v1/gpus` to see which GPU **UUIDs** have telemetry.
+2. Copy a `uuid` from the response.
+3. Call `GET /api/v1/gpus/{id}/telemetry` with that UUID as `{id}` to see metrics sorted from newest to oldest.
+
+---
+
 ## High‑Level Architecture
+
+If you are new to Go, Docker, Kubernetes, or kind, read this section slowly; it explains **what each piece is and why it exists**.
 
 At a high level, the system looks like this:
 
-- **DCGM CSV telemetry** (`dcgm_metrics_20250718_134233.csv`) is the raw source of GPU metrics.
+- **DCGM CSV telemetry** (`dcgm_metrics_20250718_134233.csv`) is the raw source of GPU metrics. Think of it as a big log file of GPU stats.
 - **Telemetry Streamer service** (`cmd/streamer`):
   - All streamer pods share a **Postgres‑backed work index** (`stream_progress` table).
   - Each pod repeatedly reserves the **next CSV row index** and publishes a telemetry message to the MQ.
@@ -33,6 +127,29 @@ At a high level, the system looks like this:
 - **Helm chart** (`helm/telemetry-pipeline`):
   - Deploys all components to Kubernetes (tested with kind).
   - Allows independent scaling of **streamer**, **collector**, and **mq-broker**.
+
+### Design Decisions and Rationale
+
+This section explains **why** the architecture looks the way it does.
+
+- **Custom in‑memory message queue instead of Kafka/RabbitMQ**:
+  - Requirement was to practice/illustrate **queue design** in Go.
+  - An in‑memory queue plus a tiny HTTP broker is enough for a single‑node kind cluster and keeps the code easy to understand.
+  - At‑most‑once delivery is acceptable for telemetry demo workloads.
+- **Separate services (streamer, collector, mq-broker, api)** instead of one monolith:
+  - Lets you scale producers and consumers **independently** (m×n scaling).
+  - Mirrors real‑world microservice patterns without unnecessary complexity.
+- **Postgres as both datastore and work coordinator**:
+  - We already need Postgres to store telemetry.
+  - Using a simple `stream_progress` table gives a **single source of truth** for “next CSV row to process” shared by all streamer pods.
+  - This is much simpler than trying to coordinate CSV offsets by hand across pods.
+- **UUID‑centric API**:
+  - GPUs in telemetry have both a `gpu_id` (small integer‑like string) and a `uuid` (stable global identifier).
+  - The API surfaces **UUIDs** as the primary identifier to avoid confusion if `gpu_id` values are reused or differ across hosts.
+  - `GET /api/v1/gpus` lists distinct UUIDs; `GET /api/v1/gpus/{id}/telemetry` treats `{id}` as a UUID.
+- **Timestamps taken at processing time**:
+  - Rather than trusting CSV timestamps, the streamer records **when** it processed each row.
+  - This makes it easier to reason about data freshness in a live pipeline.
 
 ### Message Queue Design
 
@@ -92,6 +209,12 @@ This design keeps services decoupled while preserving simple FIFO semantics and 
   - Uses `mq.NewHTTPQueue(MQ_BASE_URL)` to publish JSON‑encoded `telemetry.Record` messages to `telemetry-mq`.
   - Metadata includes `metric_name`, `hostname`, and `uuid`.
 
+**Design decisions (streamer)**:
+
+- Keep streamer **stateless** about progress (no local offsets); all progress lives in Postgres (`stream_progress`), which makes scaling and restarts safe.
+- Use processing time for `timestamp` to reflect when the row was actually streamed, not just when it was originally recorded.
+- Load the CSV once into memory to keep the implementation simple and efficient for this demo workload.
+
 **Scaling**:
 
 - To scale streamers to **N pods**, simply scale the deployment:
@@ -138,6 +261,12 @@ This design keeps services decoupled while preserving simple FIFO semantics and 
     );
     ```
 
+**Design decisions (collector)**:
+
+- Use a **worker pool** per pod so you can scale within a single container (via `collector.workers`) without changing deployment topology.
+- Use Postgres as the durable store so the API and other consumers can reuse the same data.
+- Integrate with at‑least‑once delivery by **acking messages only after** a successful `Save`, meaning unacked messages can safely be redelivered.
+
 **Scaling**:
 
 - Vertical within a pod: increase `collector.workers` (Helm value → `COLLECTOR_WORKERS`).
@@ -158,7 +287,14 @@ This design keeps services decoupled while preserving simple FIFO semantics and 
   - `GET /healthz` → basic health check.
   - `POST /publish` → wrap `queue.Publish`.
   - `POST /consume` → wrap `queue.Consume` (blocking until a message is available).
+  - `POST /ack` → mark a consumed message (by ID) as successfully processed.
 - Because it is a single deployment (usually 1 replica), it centralizes message ordering and ownership.
+
+**Design decisions (MQ broker)**:
+
+- Use a **simple in‑memory queue** to keep the system easy to understand and operate in a local kind cluster.
+- Expose a small HTTP API so any service (or language) can publish/consume/ack without linking Go code.
+- Provide **at‑least‑once semantics** by tracking in‑flight messages with a visibility timeout and re‑queueing any that are not acked in time.
 
 ### 4. API Gateway (`cmd/api`, `api/server.go`)
 
@@ -170,18 +306,24 @@ This design keeps services decoupled while preserving simple FIFO semantics and 
 
   - `GET /healthz` → `200 OK` if API process is up.
 
-- **List GPUs**:
+- **List GPUs (by UUID)**:
 
   - `GET /api/v1/gpus`
-  - Returns an array of `gpu_id` strings for which telemetry exists.
+  - Returns an array of objects, each describing one GPU that has telemetry:
+    - `uuid` – the stable GPU UUID (this is what you use in the other endpoint).
+    - `device` – device name from telemetry (for example `nvidia0`).
+    - `modelName` – GPU model string.
 
-- **Telemetry by GPU**:
+- **Telemetry by GPU UUID**:
 
   - `GET /api/v1/gpus/{id}/telemetry`
+  - Here `{id}` is the **GPU UUID** (for example `GPU-0aba4c65-be7d-8418-977a-c950c14b989a`).
   - Optional query params:
     - `start_time` (inclusive, RFC3339)
     - `end_time` (inclusive, RFC3339)
-  - Returns an array of `TelemetryRecord` JSON objects ordered by `timestamp`.
+  - Returns an array of `telemetry.Record` JSON objects:
+    - Only for that **UUID**.
+    - Ordered by `timestamp` **descending** (latest metrics first).
 
 #### OpenAPI and Swagger
 
@@ -198,23 +340,27 @@ This gives you a self‑contained API doc and testing interface.
 
 ## Build and Packaging Instructions
 
-### Prerequisites
+### Prerequisites (what you need installed)
 
-- Go 1.23+ (toolchain set to Go 1.24 in `go.mod`).
-- Docker.
-- kind (Kubernetes in Docker).
-- kubectl.
-- helm.
+- **Go 1.23+** (only needed if you want to run tests or build binaries locally).
+- **Docker** (used by kind and to build images).
+- **kind** (Kubernetes in Docker) – this lets you run a K8s cluster on your laptop.
+- **kubectl** – CLI to talk to Kubernetes.
+- **helm** – package manager for Kubernetes (used to install this app).
 
-### Go Build / Test
+If you are a complete beginner, install these in this order: Docker → kind → kubectl → helm → Go.
 
-From repo root (`/Users/varunv/go/src/varunv/gpu`):
+### Go Build / Test (optional but recommended)
+
+From repo root (after cloning):
 
 ```bash
+cd /Users/varunv/go/src/varunv/gpu
+
 # Run all unit tests
 go test ./...
 
-# Run focused coverage on core services
+# Or just the core services with coverage
 go test ./api ./collector ./mq ./streamer -coverprofile=coverage.out
 go tool cover -func=coverage.out
 ```
@@ -232,13 +378,15 @@ The repo includes Dockerfiles for each service:
 Build all images:
 
 ```bash
+cd /Users/varunv/go/src/varunv/gpu
+
 docker build -f Dockerfile.mqbroker  -t gpu-telemetry-mqbroker:latest .
 docker build -f Dockerfile.streamer  -t gpu-telemetry-streamer:latest .
 docker build -f Dockerfile.collector -t gpu-telemetry-collector:latest .
 docker build -f Dockerfile.api       -t gpu-telemetry-api:latest .
 ```
 
-For use with kind:
+For use with kind you must **load** the local images into the cluster node:
 
 ```bash
 kind load docker-image gpu-telemetry-mqbroker:latest --name gpu
@@ -247,9 +395,9 @@ kind load docker-image gpu-telemetry-collector:latest --name gpu
 kind load docker-image gpu-telemetry-api:latest       --name gpu
 ```
 
-### OpenAPI Generation
+### OpenAPI Generation (optional)
 
-To regenerate a standalone `api/openapi.json` file from the code:
+The API already serves `/openapi.json` dynamically. If you want a **static file** copy:
 
 ```bash
 # Uses cmd/api-openapi to print the spec to stdout
@@ -258,11 +406,11 @@ go run ./cmd/api-openapi > api/openapi.json
 
 ---
 
-## Helm Chart and Installation Workflow
+## Helm Chart and Installation Workflow (step‑by‑step for beginners)
 
-### Chart Layout
+### Chart Layout (what Helm will create)
 
-- `helm/telemetry-pipeline/Chart.yaml` – metadata.
+- `helm/telemetry-pipeline/Chart.yaml` – chart metadata.
 - `helm/telemetry-pipeline/values.yaml` – configurable values:
   - `mqBroker` – image, replicas, queueCapacity.
   - `streamer` – image, replicas, sleepMillis.
@@ -270,25 +418,35 @@ go run ./cmd/api-openapi > api/openapi.json
   - `api` – image, replicas.
   - `postgres` – image, credentials, DB name, port.
 - `helm/telemetry-pipeline/templates/`:
-  - `postgres-configmap.yaml` – `init.sql` to create `telemetry` table.
+  - `postgres-configmap.yaml` – `init.sql` to create `telemetry` and `stream_progress` tables.
   - `postgres-deployment.yaml`, `postgres-service.yaml`.
   - `mqbroker-deployment.yaml`, `mqbroker-service.yaml`.
   - `streamer-deployment.yaml`.
   - `collector-deployment.yaml`.
   - `api-deployment.yaml`, `api-service.yaml`.
 
-### 1. Create kind Cluster
+### 1. Create a kind Cluster
+
+Run this **once** (if you don’t already have a `gpu` cluster):
 
 ```bash
 kind create cluster --name gpu
 kubectl config use-context kind-gpu
 ```
 
-### 2. Load Images into kind
-
-From repo root:
+You can verify:
 
 ```bash
+kubectl get nodes
+```
+
+### 2. Build and Load Images into kind
+
+From the repo root:
+
+```bash
+cd /Users/varunv/go/src/varunv/gpu
+
 docker build -f Dockerfile.mqbroker  -t gpu-telemetry-mqbroker:latest .
 docker build -f Dockerfile.streamer  -t gpu-telemetry-streamer:latest .
 docker build -f Dockerfile.collector -t gpu-telemetry-collector:latest .
@@ -300,11 +458,16 @@ kind load docker-image gpu-telemetry-collector:latest --name gpu
 kind load docker-image gpu-telemetry-api:latest       --name gpu
 ```
 
-### 3. Install Helm Chart
+This makes the images available **inside** the kind cluster.
+
+### 3. Install the Helm Chart
+
+From the repo root:
 
 ```bash
-cd helm/telemetry-pipeline
-helm install telemetry-pipeline .
+cd /Users/varunv/go/src/varunv/gpu
+
+helm upgrade --install telemetry-pipeline ./helm/telemetry-pipeline
 ```
 
 Watch pods come up:
@@ -313,7 +476,7 @@ Watch pods come up:
 kubectl get pods
 ```
 
-You should see:
+You should see pods like:
 
 - `telemetry-postgres`
 - `telemetry-mq`
@@ -321,15 +484,17 @@ You should see:
 - `telemetry-collector`
 - `telemetry-api`
 
+Wait until all are in `Running` state.
+
 ### 4. Scaling Streamers and Collectors
 
-- Scale streamers (more producers):
+- Scale streamers (more producers of telemetry messages):
 
 ```bash
 kubectl scale deploy/telemetry-streamer --replicas=4
 ```
 
-- Scale collectors (more consumers):
+- Scale collectors (more consumers that write to Postgres):
 
 ```bash
 kubectl scale deploy/telemetry-collector --replicas=4
@@ -339,12 +504,16 @@ No config change is needed: the shared `stream_progress` in Postgres ensures str
 
 ---
 
-## Sample User Workflow
+## Sample User Workflow (end‑to‑end, as a beginner)
 
 1. **Bootstrap the cluster**
-   - Create kind cluster.
-   - Build & load images.
-   - `helm install telemetry-pipeline ./helm/telemetry-pipeline`.
+   - Create kind cluster (if not already created).
+   - Build & load images into kind.
+   - Install or upgrade the Helm release:
+
+     ```bash
+     helm upgrade --install telemetry-pipeline ./helm/telemetry-pipeline
+     ```
 
 2. **Verify telemetry ingestion**
 
@@ -358,7 +527,7 @@ No config change is needed: the shared `stream_progress` in Postgres ensures str
 
 3. **Explore the API via Swagger**
 
-   - Port‑forward the API:
+   - Port‑forward the API service from the cluster to your laptop:
 
      ```bash
      kubectl port-forward svc/telemetry-api 8080:80
@@ -369,8 +538,9 @@ No config change is needed: the shared `stream_progress` in Postgres ensures str
      - OpenAPI JSON: `http://localhost:8080/openapi.json`
 
    - In Swagger UI, try:
-     - `GET /api/v1/gpus` to see which GPUs have telemetry.
-     - `GET /api/v1/gpus/{id}/telemetry` with optional `start_time` / `end_time` filters.
+     - `GET /api/v1/gpus` to see which GPU **UUIDs** have telemetry.
+     - Copy one of the `uuid` values.
+     - `GET /api/v1/gpus/{id}/telemetry` using that UUID as `{id}`. You should see telemetry records ordered from newest to oldest.
 
 4. **Scale for load**
 
@@ -383,7 +553,7 @@ No config change is needed: the shared `stream_progress` in Postgres ensures str
 
    - Streamers will cooperatively read from the CSV via the shared Postgres cursor and push into MQ; collectors will compete for those messages and persist them.
 
-5. **Inspect data directly in Postgres (optional)**
+5. **Inspect data directly in Postgres (optional, for debugging or curiosity)**
 
    - Port‑forward Postgres:
 
@@ -396,7 +566,7 @@ No config change is needed: the shared `stream_progress` in Postgres ensures str
      ```bash
      psql "postgres://gpu:gpu-password@localhost:5432/gpu?sslmode=disable"
      SELECT COUNT(*) FROM telemetry;
-     SELECT DISTINCT gpu_id FROM telemetry;
+     SELECT DISTINCT uuid FROM telemetry;
      ```
 
 ---

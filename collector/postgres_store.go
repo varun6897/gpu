@@ -6,28 +6,28 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 // PostgresStore is a Store implementation backed by a PostgreSQL database.
 // It assumes a table with the following schema (field names can be adjusted
 // as needed, but types should be compatible):
 //
-//   CREATE TABLE IF NOT EXISTS telemetry (
-//     id          BIGSERIAL PRIMARY KEY,
-//     timestamp   TIMESTAMPTZ NOT NULL,
-//     metric_name TEXT        NOT NULL,
-//     gpu_id      TEXT        NOT NULL,
-//     device      TEXT        NOT NULL,
-//     uuid        TEXT        NOT NULL,
-//     model_name  TEXT        NOT NULL,
-//     hostname    TEXT        NOT NULL,
-//     container   TEXT        NOT NULL,
-//     pod         TEXT        NOT NULL,
-//     namespace   TEXT        NOT NULL,
-//     value       TEXT        NOT NULL,
-//     labels_raw  TEXT        NOT NULL
-//   );
+//	CREATE TABLE IF NOT EXISTS telemetry (
+//	  id          BIGSERIAL PRIMARY KEY,
+//	  timestamp   TIMESTAMPTZ NOT NULL,
+//	  metric_name TEXT        NOT NULL,
+//	  gpu_id      TEXT        NOT NULL,
+//	  device      TEXT        NOT NULL,
+//	  uuid        TEXT        NOT NULL,
+//	  model_name  TEXT        NOT NULL,
+//	  hostname    TEXT        NOT NULL,
+//	  container   TEXT        NOT NULL,
+//	  pod         TEXT        NOT NULL,
+//	  namespace   TEXT        NOT NULL,
+//	  value       TEXT        NOT NULL,
+//	  labels_raw  TEXT        NOT NULL
+//	);
 //
 // All collector instances in the cluster can safely share the same database.
 type PostgresStore struct {
@@ -71,40 +71,43 @@ INSERT INTO telemetry (
 	return nil
 }
 
-// ListGPUs returns the distinct GPU IDs for which telemetry exists.
-func (s *PostgresStore) ListGPUs() ([]string, error) {
-	const q = `SELECT DISTINCT gpu_id FROM telemetry`
+// ListGPUs returns distinct GPU metadata (uuid, device, modelName).
+func (s *PostgresStore) ListGPUs() ([]telemetry.GPUInfo, error) {
+	const q = `
+SELECT DISTINCT uuid, device, model_name
+FROM telemetry
+`
 	rows, err := s.db.Query(q)
 	if err != nil {
 		return nil, fmt.Errorf("postgres store: list gpus: %w", err)
 	}
 	defer rows.Close()
 
-	var ids []string
+	var infos []telemetry.GPUInfo
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("postgres store: scan gpu_id: %w", err)
+		var info telemetry.GPUInfo
+		if err := rows.Scan(&info.UUID, &info.Device, &info.ModelName); err != nil {
+			return nil, fmt.Errorf("postgres store: scan gpu info: %w", err)
 		}
-		ids = append(ids, id)
+		infos = append(infos, info)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("postgres store: rows error: %w", err)
 	}
-	return ids, nil
+	return infos, nil
 }
 
-// QueryByGPU returns telemetry for a GPU ID, optionally constrained by a time
-// window. Results are ordered by timestamp ascending.
-func (s *PostgresStore) QueryByGPU(gpuID string, start, end time.Time) ([]telemetry.Record, error) {
+// QueryByGPU returns telemetry for a GPU UUID, optionally constrained by a time
+// window. Results are ordered by timestamp descending (latest first).
+func (s *PostgresStore) QueryByGPU(uuid string, start, end time.Time) ([]telemetry.Record, error) {
 	base := `
 SELECT
   timestamp, metric_name, gpu_id, device, uuid, model_name,
   hostname, container, pod, namespace, value, labels_raw
 FROM telemetry
-WHERE gpu_id = $1
+WHERE uuid = $1
 `
-	args := []any{gpuID}
+	args := []any{uuid}
 	argIdx := 2
 
 	if !start.IsZero() {
@@ -118,7 +121,7 @@ WHERE gpu_id = $1
 		argIdx++
 	}
 
-	base += " ORDER BY timestamp ASC"
+	base += " ORDER BY timestamp DESC"
 
 	rows, err := s.db.Query(base, args...)
 	if err != nil {
@@ -152,5 +155,3 @@ WHERE gpu_id = $1
 	}
 	return out, nil
 }
-
-

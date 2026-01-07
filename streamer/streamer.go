@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/varunv/gpu/mq"
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/mq"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 // Config controls how the telemetry streamer behaves.

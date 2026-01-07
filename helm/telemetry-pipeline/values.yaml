@@ -9,7 +9,7 @@ pipeline:
 api:
   image:
     repository: gpu-telemetry-api
-    tag: "latest"
+    tag: "v0.4.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
 
@@ -32,7 +32,7 @@ streamer:
 collector:
   image:
     repository: gpu-telemetry-collector
-    tag: "latest"
+    tag: "v0.4.0"
     pullPolicy: IfNotPresent
   replicaCount: 1
   workers: 4

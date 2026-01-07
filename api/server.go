@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 // Store is the subset of persistence methods needed by the HTTP API.
 type Store interface {
-	ListGPUs() ([]string, error)
+	ListGPUs() ([]telemetry.GPUInfo, error)
 	QueryByGPU(gpuID string, start, end time.Time) ([]telemetry.Record, error)
 }
 
@@ -58,7 +58,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListGPUs implements:
-//   GET /api/v1/gpus
+//
+//	GET /api/v1/gpus
+//
 // Response: 200 JSON array of GPU ID strings.
 func (s *Server) handleListGPUs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -74,22 +76,25 @@ func (s *Server) handleListGPUs(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTelemetryByGPU implements:
-//   GET /api/v1/gpus/{id}/telemetry?start_time=...&end_time=...
-// where start_time and end_time are optional RFC3339 timestamps.
+//
+//	GET /api/v1/gpus/{uuid}/telemetry?start_time=...&end_time=...
+//
+// where start_time and end_time are optional RFC3339 timestamps and {uuid}
+// refers to the GPU UUID, not the numeric gpu_id.
 func (s *Server) handleTelemetryByGPU(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Path is expected to be /api/v1/gpus/{id}/telemetry
+	// Path is expected to be /api/v1/gpus/{uuid}/telemetry
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/gpus/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 2 || parts[1] != "telemetry" || parts[0] == "" {
 		http.NotFound(w, r)
 		return
 	}
-	gpuID := parts[0]
+	uuid := parts[0]
 
 	var start, end time.Time
 	var err error
@@ -109,7 +114,7 @@ func (s *Server) handleTelemetryByGPU(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	records, err := s.store.QueryByGPU(gpuID, start, end)
+	records, err := s.store.QueryByGPU(uuid, start, end)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -137,15 +142,17 @@ func BuildOpenAPISpec() map[string]any {
 			"/api/v1/gpus": map[string]any{
 				"get": map[string]any{
 					"summary":     "List all GPUs",
-					"description": "Return a list of all GPUs for which telemetry data is available.",
+					"description": "Return a list of all GPUs for which telemetry data is available, including uuid, device, and modelName.",
 					"responses": map[string]any{
 						"200": map[string]any{
 							"description": "OK",
 							"content": map[string]any{
 								"application/json": map[string]any{
 									"schema": map[string]any{
-										"type":  "array",
-										"items": map[string]any{"type": "string"},
+										"type": "array",
+										"items": map[string]any{
+											"$ref": "#/components/schemas/GPUInfo",
+										},
 									},
 								},
 							},
@@ -199,6 +206,14 @@ func BuildOpenAPISpec() map[string]any {
 		},
 		"components": map[string]any{
 			"schemas": map[string]any{
+				"GPUInfo": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"uuid":      map[string]any{"type": "string"},
+						"device":    map[string]any{"type": "string"},
+						"modelName": map[string]any{"type": "string"},
+					},
+				},
 				"TelemetryRecord": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -260,7 +275,3 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
   </body>
 </html>`))
 }
-
-
-
-

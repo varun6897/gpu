@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 func TestPostgresStoreSave(t *testing.T) {
@@ -57,15 +57,18 @@ func TestPostgresStoreListAndQuery(t *testing.T) {
 	store := NewPostgresStore(db)
 
 	// ListGPUs
-	rows := sqlmock.NewRows([]string{"gpu_id"}).AddRow("0").AddRow("1")
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT DISTINCT gpu_id FROM telemetry")).WillReturnRows(rows)
+	rows := sqlmock.NewRows([]string{"uuid", "device", "model_name"}).
+		AddRow("uuid0", "dev0", "model0").
+		AddRow("uuid1", "dev1", "model1")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT DISTINCT uuid, device, model_name")).
+		WillReturnRows(rows)
 
 	gpus, err := store.ListGPUs()
 	if err != nil {
 		t.Fatalf("ListGPUs returned error: %v", err)
 	}
-	if len(gpus) != 2 {
-		t.Fatalf("expected 2 GPUs, got %d", len(gpus))
+	if len(gpus) != 2 || gpus[0].UUID != "uuid0" || gpus[0].Device != "dev0" || gpus[0].ModelName != "model0" {
+		t.Fatalf("unexpected GPU infos: %#v", gpus)
 	}
 
 	// QueryByGPU without time window.
@@ -75,11 +78,11 @@ func TestPostgresStoreListAndQuery(t *testing.T) {
 		"hostname", "container", "pod", "namespace", "value", "labels_raw",
 	}).AddRow(ts, "metric", "0", "dev", "uuid", "model", "host", "cont", "pod", "ns", "42", "labels")
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT") + ".*FROM telemetry.*WHERE gpu_id = \\$1").
-		WithArgs("0").
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT") + ".*FROM telemetry.*WHERE uuid = \\$1").
+		WithArgs("uuid0").
 		WillReturnRows(qRows)
 
-	recs, err := store.QueryByGPU("0", time.Time{}, time.Time{})
+	recs, err := store.QueryByGPU("uuid0", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryByGPU returned error: %v", err)
 	}
@@ -91,5 +94,3 @@ func TestPostgresStoreListAndQuery(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
-
-

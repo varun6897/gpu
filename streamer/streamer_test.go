@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varunv/gpu/mq"
+	"github.com/varun6897/gpu/mq"
 )
 
 func TestRunStreamsRecordsOnce(t *testing.T) {
@@ -47,6 +47,63 @@ func TestRunStreamsRecordsOnce(t *testing.T) {
 	}
 	if len(msg.Payload) == 0 {
 		t.Fatalf("expected non-empty payload")
+	}
+}
+
+func TestRunRequiresQueue(t *testing.T) {
+	ctx := context.Background()
+	err := Run(ctx, Config{
+		CSVPath: "does-not-matter.csv",
+		Queue:   nil,
+	})
+	if err == nil {
+		t.Fatalf("expected error when Queue is nil")
+	}
+}
+
+func TestRunRequiresCSVPath(t *testing.T) {
+	ctx := context.Background()
+	q := mq.NewInMemoryQueue(1)
+	err := Run(ctx, Config{
+		CSVPath: "",
+		Queue:   q,
+	})
+	if err == nil {
+		t.Fatalf("expected error when CSVPath is empty")
+	}
+}
+
+func TestRunInvalidShardConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	csvPath := filepath.Join(tmpDir, "shard_err.csv")
+
+	const csvContent = `timestamp,metric_name,gpu_id,device,uuid,modelName,Hostname,container,pod,namespace,value,labels_raw
+"2025-07-18T20:42:34Z","DCGM_FI_DEV_GPU_UTIL","0","nvidia0","GPU-0","NVIDIA","host","","","","1","labels"
+`
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp CSV: %v", err)
+	}
+
+	ctx := context.Background()
+	q := mq.NewInMemoryQueue(1)
+
+	// Negative ShardCount.
+	if err := Run(ctx, Config{
+		CSVPath:    csvPath,
+		Queue:      q,
+		ShardCount: -1,
+	}); err == nil {
+		t.Fatalf("expected error for negative ShardCount")
+	}
+
+	// ShardIndex out of range.
+	if err := Run(ctx, Config{
+		CSVPath:    csvPath,
+		Queue:      q,
+		ShardCount: 2,
+		ShardIndex: 2,
+	}); err == nil {
+		t.Fatalf("expected error for out-of-range ShardIndex")
 	}
 }
 
@@ -190,6 +247,71 @@ func TestRunShardSkip(t *testing.T) {
 	}
 	if len(fq.published) != 0 {
 		t.Fatalf("expected no messages published for non-owning shard, got %d", len(fq.published))
+	}
+}
+
+// TestRunSkipsMalformedRow ensures rows with too few columns are skipped and do not cause Run to fail.
+func TestRunSkipsMalformedRow(t *testing.T) {
+	tmpDir := t.TempDir()
+	csvPath := filepath.Join(tmpDir, "malformed.csv")
+
+	// Second row has fewer than 12 columns but is still valid CSV.
+	const csvContent = `timestamp,metric_name,gpu_id,device,uuid,modelName,Hostname,container,pod,namespace,value,labels_raw
+"2025-07-18T20:42:34Z","METRIC","0","nvidia0","GPU-0","NVIDIA","host","","","","1","labels"
+"2025-07-18T20:42:34Z","METRIC","0"
+`
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp CSV: %v", err)
+	}
+
+	fq := &fakeQueue{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := Run(ctx, Config{
+		CSVPath: csvPath,
+		Queue:   fq,
+		Loop:    false,
+	}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	// Only the well-formed row should have been published.
+	if len(fq.published) != 1 {
+		t.Fatalf("expected 1 published message, got %d", len(fq.published))
+	}
+}
+
+// TestRunLoopRewinds verifies that when Loop=true, Run rewinds at EOF and continues reading.
+func TestRunLoopRewinds(t *testing.T) {
+	tmpDir := t.TempDir()
+	csvPath := filepath.Join(tmpDir, "loop.csv")
+
+	const csvContent = `timestamp,metric_name,gpu_id,device,uuid,modelName,Hostname,container,pod,namespace,value,labels_raw
+"2025-07-18T20:42:34Z","METRIC","0","nvidia0","GPU-0","NVIDIA","host","","","","1","labels"
+`
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0o644); err != nil {
+		t.Fatalf("failed to write temp CSV: %v", err)
+	}
+
+	q := mq.NewInMemoryQueue(10)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	go func() {
+		_ = Run(ctx, Config{
+			CSVPath: csvPath,
+			Queue:   q,
+			Loop:    true,
+		})
+	}()
+
+	// We expect to see at least 2 messages, indicating that EOF was reached and the file was rewound.
+	received := 0
+	for received < 2 {
+		if _, err := q.Consume(ctx); err != nil {
+			t.Fatalf("Consume failed while waiting for looped messages: %v", err)
+		}
+		received++
 	}
 }
 

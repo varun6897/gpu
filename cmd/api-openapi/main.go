@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/varunv/gpu/api"
+	"github.com/varun6897/gpu/api"
 )
 
 // This small helper program allows `make openapi` to generate the OpenAPI spec
@@ -17,5 +17,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-

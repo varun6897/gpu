@@ -114,4 +114,40 @@ func (h *HTTPQueue) Consume(ctx context.Context) (Message, error) {
 // independently of any individual client.
 func (h *HTTPQueue) Close() {}
 
+// Ack notifies the remote broker that the message with the given ID has
+// been successfully processed and can be removed from in-flight tracking.
+// If the broker does not recognise the ID, the call is treated as a
+// no-op.
+func (h *HTTPQueue) Ack(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("httpqueue: Ack requires non-empty id")
+	}
+
+	body, err := json.Marshal(map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("httpqueue: ack marshal: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.baseURL+"/ack", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("httpqueue: ack new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("httpqueue: ack: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusGone {
+		return ErrClosed
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("httpqueue: ack unexpected status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 

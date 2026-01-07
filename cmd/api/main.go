@@ -10,8 +10,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/varunv/gpu/api"
-	"github.com/varunv/gpu/collector"
+	"github.com/varun6897/gpu/api"
+	"github.com/varun6897/gpu/collector"
 )
 
 func main() {
@@ -51,5 +51,3 @@ func getenv(key, def string) string {
 	}
 	return def
 }
-
-

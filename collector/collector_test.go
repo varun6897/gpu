@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varunv/gpu/mq"
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/mq"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 func TestCollectorConsumesAndPersists(t *testing.T) {
@@ -115,6 +115,32 @@ func (s *singleMessageQueue) Consume(context.Context) (mq.Message, error) {
 }
 func (s *singleMessageQueue) Close() {}
 
+// ackQueue is a minimal mq.AckQueue implementation used to verify that
+// collectors call Ack after successfully saving a record.
+type ackQueue struct {
+	msg   mq.Message
+	acked bool
+}
+
+func (a *ackQueue) Publish(_ context.Context, _ mq.Message) error { return nil }
+func (a *ackQueue) Consume(_ context.Context) (mq.Message, error) {
+	if a.msg.ID == "" {
+		return mq.Message{}, mq.ErrClosed
+	}
+	m := a.msg
+	// Clear ID so subsequent Consume calls return ErrClosed.
+	a.msg.ID = ""
+	return m, nil
+}
+func (a *ackQueue) Close() {}
+func (a *ackQueue) Ack(_ context.Context, id string) error {
+	if id == "" {
+		return errors.New("empty id")
+	}
+	a.acked = true
+	return nil
+}
+
 func TestCollectorRunQueueClosedIsClean(t *testing.T) {
 	q := &errorQueue{err: mq.ErrClosed}
 	store := NewInMemoryStore()
@@ -156,5 +182,31 @@ func TestCollectorRunStoreError(t *testing.T) {
 		Workers: 1,
 	}); err == nil {
 		t.Fatalf("expected error from Run when Store.Save fails")
+	}
+}
+
+func TestCollectorRunUsesAckQueue(t *testing.T) {
+	// Prepare a single message with an ID so the collector will invoke Ack
+	// after successfully saving the record.
+	rec := telemetry.Record{GPUId: "0"}
+	payload, _ := json.Marshal(rec)
+
+	aq := &ackQueue{
+		msg: mq.Message{
+			ID:      "msg-1",
+			Payload: payload,
+		},
+	}
+
+	if err := Run(context.Background(), Config{
+		Queue:   aq,
+		Store:   NewInMemoryStore(),
+		Workers: 1,
+	}); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+
+	if !aq.acked {
+		t.Fatalf("expected Ack to be called on ackQueue")
 	}
 }

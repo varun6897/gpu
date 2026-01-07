@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/varunv/gpu/mq"
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/mq"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 // Store is the abstraction for telemetry persistence.
@@ -170,7 +170,15 @@ func runWorker(ctx context.Context, q mq.Queue, store Store) error {
 		if err := store.Save(ctx, rec); err != nil {
 			return err
 		}
+
+		// If the queue supports acknowledgements, signal that this
+		// message has been processed successfully. This enables
+		// at-least-once delivery semantics for HTTP-backed queues
+		// that track in-flight messages.
+		if aq, ok := q.(mq.AckQueue); ok && msg.ID != "" {
+			if err := aq.Ack(ctx, msg.ID); err != nil {
+				return fmt.Errorf("collector: ack failed for message %s: %w", msg.ID, err)
+			}
+		}
 	}
 }
-
-

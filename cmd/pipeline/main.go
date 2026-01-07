@@ -10,9 +10,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/varunv/gpu/collector"
-	"github.com/varunv/gpu/mq"
-	"github.com/varunv/gpu/streamer"
+	"github.com/varun6897/gpu/collector"
+	"github.com/varun6897/gpu/mq"
+	"github.com/varun6897/gpu/streamer"
 )
 
 func main() {

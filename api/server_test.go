@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varunv/gpu/telemetry"
+	"github.com/varun6897/gpu/telemetry"
 )
 
 type fakeStore struct {
-	gpus       []string
-	records    map[string][]telemetry.Record
-	lastStart  time.Time
-	lastEnd    time.Time
-	listErr    error
-	queryErr   error
+	gpus      []telemetry.GPUInfo
+	records   map[string][]telemetry.Record
+	lastStart time.Time
+	lastEnd   time.Time
+	listErr   error
+	queryErr  error
 }
 
-func (f *fakeStore) ListGPUs() ([]string, error) {
+func (f *fakeStore) ListGPUs() ([]telemetry.GPUInfo, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -37,7 +37,10 @@ func (f *fakeStore) QueryByGPU(gpuID string, start, end time.Time) ([]telemetry.
 }
 
 func TestHandleListGPUs(t *testing.T) {
-	fs := &fakeStore{gpus: []string{"0", "1"}}
+	fs := &fakeStore{gpus: []telemetry.GPUInfo{
+		{UUID: "uuid0", Device: "dev0", ModelName: "model0"},
+		{UUID: "uuid1", Device: "dev1", ModelName: "model1"},
+	}}
 	srv := NewServer(fs)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil)
@@ -49,11 +52,11 @@ func TestHandleListGPUs(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rr.Code)
 	}
 
-	var got []string
+	var got []telemetry.GPUInfo
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
-	if len(got) != 2 || got[0] != "0" || got[1] != "1" {
+	if len(got) != 2 || got[0].UUID != "uuid0" || got[0].Device != "dev0" || got[0].ModelName != "model0" {
 		t.Fatalf("unexpected GPUs: %#v", got)
 	}
 }
@@ -217,7 +220,3 @@ func TestHandleOpenAPI_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405 for POST /openapi.json, got %d", rr.Code)
 	}
 }
-
-
-
-

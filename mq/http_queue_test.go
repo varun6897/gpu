@@ -57,6 +57,15 @@ func TestHTTPQueuePublishConsume(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(&wm)
 	})
+	// Simple ack handler for completeness; it doesn't affect the queue
+	// used in this in-process test.
+	mux.HandleFunc("/ack", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -84,6 +93,11 @@ func TestHTTPQueuePublishConsume(t *testing.T) {
 		t.Fatalf("unexpected message: %#v", got)
 	}
 
+	// Ack should succeed against the /ack handler.
+	if err := hq.Ack(ctx, orig.ID); err != nil {
+		t.Fatalf("Ack via HTTPQueue failed: %v", err)
+	}
+
 	// Close should be a no-op but covered.
 	hq.Close()
 }
@@ -94,6 +108,9 @@ func TestHTTPQueueErrorStatuses(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	mux.HandleFunc("/consume", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	})
+	mux.HandleFunc("/ack", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone)
 	})
 
@@ -111,6 +128,33 @@ func TestHTTPQueueErrorStatuses(t *testing.T) {
 
 	if _, err := hq.Consume(ctx); err != ErrClosed {
 		t.Fatalf("expected ErrClosed from Consume on 410 status, got %v", err)
+	}
+
+	if err := hq.Ack(ctx, "1"); err != ErrClosed {
+		t.Fatalf("expected ErrClosed from Ack on 410 status, got %v", err)
+	}
+}
+
+// TestHTTPQueueConsumeDecodeError verifies that a malformed JSON payload
+// from the broker results in a decode error.
+func TestHTTPQueueConsumeDecodeError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/consume", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Write invalid JSON.
+		_, _ = w.Write([]byte("{not-json"))
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	hq := NewHTTPQueue(srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := hq.Consume(ctx); err == nil {
+		t.Fatalf("expected error from Consume when broker returns invalid JSON")
 	}
 }
 

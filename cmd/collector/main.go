@@ -10,8 +10,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/varunv/gpu/collector"
-	"github.com/varunv/gpu/mq"
+	"github.com/varun6897/gpu/collector"
+	"github.com/varun6897/gpu/mq"
 )
 
 func main() {
@@ -66,5 +66,3 @@ func getEnvInt(key string, def int) int {
 	}
 	return def
 }
-
-
