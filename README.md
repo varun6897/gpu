@@ -278,35 +278,35 @@ The diagram below shows the main data flow from the CSV file through the system 
 ```mermaid
 flowchart LR
     subgraph LocalFiles
-        CSV[DCGM CSV\n(dcgm_metrics_20250718_134233.csv)]
+        CSV[DCGM CSV<br/>dcgm_metrics_20250718_134233.csv]
     end
 
-    subgraph KubernetesCluster[kind \"gpu\" cluster]
-        subgraph DB[TimescaleDB (Postgres)]
-            PG[(telemetry table\n+ hypertable)]
+    subgraph KubernetesCluster["kind gpu cluster"]
+        subgraph DB["TimescaleDB / Postgres"]
+            PG[(telemetry table<br/>+ hypertable)]
             SP[(stream_progress table)]
         end
 
-        subgraph MQBroker[MQ Broker\ncmd/mqbroker]
-            MQQueue[InMemoryQueue\n(mq.InMemoryQueue)]
+        subgraph MQBroker["MQ Broker<br/>cmd/mqbroker"]
+            MQQueue[InMemoryQueue<br/>mq.InMemoryQueue]
         end
 
-        subgraph Streamers[Streamers\ncmd/streamer]
+        subgraph Streamers["Streamers<br/>cmd/streamer"]
             S1[streamer pod 1]
             S2[streamer pod 2]
         end
 
-        subgraph Collectors[Collectors\ncmd/collector]
+        subgraph Collectors["Collectors<br/>cmd/collector"]
             C1[collector pod 1]
             C2[collector pod 2]
         end
 
-        subgraph APIService[API Gateway\ncmd/api]
-            API[/HTTP API\n(/api/v1/...)/]
+        subgraph APIService["API Gateway<br/>cmd/api"]
+            API[/HTTP API<br/>/api/v1/.../]
         end
     end
 
-    User[You in browser\nSwagger UI] -->|HTTP/JSON| API
+    User[You in browser<br/>Swagger UI] -->|HTTP/JSON| API
     API -->|SQL queries| PG
 
     CSV -->|read rows| S1
