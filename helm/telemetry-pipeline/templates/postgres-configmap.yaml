@@ -4,8 +4,12 @@ metadata:
   name: telemetry-postgres-init
 data:
   init.sql: |
+    -- Enable TimescaleDB extension if not already present
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+    -- Base telemetry table definition (Timescale works on regular tables).
     CREATE TABLE IF NOT EXISTS telemetry (
-      id          BIGSERIAL PRIMARY KEY,
+      id          BIGSERIAL NOT NULL,
       timestamp   TIMESTAMPTZ NOT NULL,
       metric_name TEXT        NOT NULL,
       gpu_id      TEXT        NOT NULL,
@@ -19,5 +23,29 @@ data:
       value       TEXT        NOT NULL,
       labels_raw  TEXT        NOT NULL
     );
+
+    -- Ensure the primary key (if any) includes the partitioning column
+    -- "timestamp". For fresh installs, this will simply add the desired
+    -- composite primary key; for upgrades from an older schema that used
+    -- PRIMARY KEY (id), we drop that constraint first and then recreate it.
+    DO $$
+    DECLARE
+      pk_name text;
+    BEGIN
+      SELECT conname INTO pk_name
+      FROM pg_constraint
+      WHERE conrelid = 'telemetry'::regclass
+        AND contype = 'p';
+
+      IF pk_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE telemetry DROP CONSTRAINT %I', pk_name);
+      END IF;
+    END$$;
+
+    ALTER TABLE telemetry
+      ADD CONSTRAINT telemetry_pkey PRIMARY KEY (timestamp, id);
+
+    -- Convert telemetry into a hypertable (idempotent when run on existing tables)
+    SELECT create_hypertable('telemetry', 'timestamp', if_not_exists => TRUE);
 
 

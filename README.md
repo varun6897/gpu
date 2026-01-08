@@ -4,6 +4,85 @@ This repository implements an elastic, Kubernetes‑deployable GPU telemetry pip
 
 The design follows the requirements in `GPU Telemetry Pipeline Message Queue.pdf`.
 
+If you are **new to Go, Docker, Kubernetes, or databases**, this README is written for you. You should be able to:
+
+- Set everything up on a local kind cluster.
+- See real GPU telemetry flowing through the system.
+- Understand *why* each design choice was made.
+
+---
+
+## Table of Contents
+
+- **Quick Start (for complete beginners)**
+  - [Quick Start: One‑command setup](#quick-start-one-command-setup)
+  - [What you should see](#what-you-should-see)
+- **Step‑by‑Step Setup (explained)**
+  - [1. Install prerequisites](#1-install-prerequisites)
+  - [2. Clone this repository](#2-clone-this-repository)
+  - [3. Run tests and coverage (optional but recommended)](#3-run-tests-and-coverage-optional-but-recommended)
+  - [4. Create a kind cluster](#4-create-a-kind-cluster)
+  - [5. Build Docker images](#5-build-docker-images)
+  - [6. Load images into kind](#6-load-images-into-kind)
+  - [7. Install the Helm chart](#7-install-the-helm-chart)
+  - [8. Explore the API](#8-explore-the-api)
+- **Architecture and Design**
+  - [High‑Level Architecture](#high-level-architecture)
+  - [Architecture Diagram](#architecture-diagram)
+  - [Design Decisions and Rationale](#design-decisions-and-rationale)
+  - [Message Queue Design](#message-queue-design)
+  - [Components and How They Work](#components-and-how-they-work)
+- **Build, Packaging, and Helm Workflow**
+  - [Build and Packaging Instructions](#build-and-packaging-instructions)
+  - [Helm Chart and Installation Workflow](#helm-chart-and-installation-workflow-step-by-step-for-beginners)
+  - [Sample User Workflow](#sample-user-workflow-end-to-end-as-a-beginner)
+- [How AI Assistance Was Used](#how-ai-assistance-was-used)
+
+---
+
+## Quick Start (one‑command setup)
+
+If you just want to **see the system running** as fast as possible and you are on a machine that already has **Docker**, **kind**, **kubectl**, and **Helm** installed, you can use the `Makefile` helpers.
+
+From the repo root:
+
+```bash
+cd /Users/varunv/go/src/varunv/gpu
+
+# This will:
+# 1) Create a kind cluster called "gpu" (if it does not exist),
+# 2) Build Docker images for all services,
+# 3) Load them into the kind cluster node,
+# 4) Install/upgrade the Helm chart and show pod status.
+make quickstart-deploy
+```
+
+Then check the pods:
+
+```bash
+kubectl get pods
+```
+
+You should see:
+
+- `telemetry-postgres` – TimescaleDB (Postgres with time‑series extensions)
+- `telemetry-mq` – message queue broker
+- `telemetry-streamer` – CSV streamer
+- `telemetry-collector` – collector
+- `telemetry-api` – HTTP API
+
+All should reach `Running` status.
+
+To clean everything up:
+
+```bash
+make quickstart-clean
+```
+
+This will uninstall the Helm release and delete the `gpu` kind cluster.
+
+If you prefer to do everything manually (to understand each step), keep reading.
+
 ---
 
 ## Getting Started (Step‑by‑Step)
@@ -12,15 +91,25 @@ If you are a complete beginner, follow these steps in order.
 
 ### 1. Install prerequisites
 
-- **Docker** – container runtime.
-- **kind** – Kubernetes in Docker.
-- **kubectl** – Kubernetes CLI.
-- **helm** – Kubernetes package manager.
+You need these tools installed:
+
+- **Docker** – container runtime (runs your containers locally).
+- **kind** – “Kubernetes in Docker” (a local Kubernetes cluster inside Docker).
+- **kubectl** – Kubernetes CLI (how you talk to the cluster).
+- **helm** – Kubernetes package manager (how we install this app).
 - **Go 1.23+** – only if you want to run tests or build binaries yourself.
 
 Install in this order: **Docker → kind → kubectl → helm → Go**.
 
+Why this order?
+
+- Docker must be working **before** kind can create a cluster.
+- kubectl and helm need a cluster to talk to, which kind will provide.
+- Go is only needed for running tests or local binaries, not for running the cluster.
+
 ### 2. Clone this repository
+
+You only need to do this once:
 
 ```bash
 mkdir -p ~/go/src/varunv
@@ -29,14 +118,29 @@ git clone <this-repo-url> gpu
 cd gpu
 ```
 
-### 3. (Optional) Run tests locally
+From now on, when this README says “repo root”, it means this `gpu` directory.
+
+### 3. Run tests and coverage (optional but recommended)
+
+This step is for people who want to check the code quality before running the system.
+
+Using raw `go` commands:
 
 ```bash
 go test ./api ./collector ./mq ./streamer -coverprofile=coverage.out
 go tool cover -func=coverage.out
 ```
 
+Or using the `Makefile` helpers:
+
+```bash
+make test           # runs go test ./...
+make coverage       # runs coverage on core packages and prints summary
+```
+
 ### 4. Create a kind cluster
+
+Create and switch to a local Kubernetes cluster named `gpu`:
 
 ```bash
 kind create cluster --name gpu
@@ -44,7 +148,13 @@ kubectl config use-context kind-gpu
 kubectl get nodes
 ```
 
+You should see at least one node (the control plane) in `Ready` or `NotReady` (if it’s still starting) state.
+
+If you used `make quickstart-deploy` earlier, this step was already done for you by the `kind-up` target.
+
 ### 5. Build Docker images
+
+From the repo root:
 
 ```bash
 docker build -f Dockerfile.mqbroker  -t gpu-telemetry-mqbroker:latest .
@@ -53,7 +163,15 @@ docker build -f Dockerfile.collector -t gpu-telemetry-collector:latest .
 docker build -f Dockerfile.api       -t gpu-telemetry-api:latest .
 ```
 
+Or using the `Makefile`:
+
+```bash
+make build-images
+```
+
 ### 6. Load images into the kind cluster
+
+kind runs Kubernetes **inside Docker containers**, so your images need to be copied into that environment:
 
 ```bash
 kind load docker-image gpu-telemetry-mqbroker:latest --name gpu
@@ -62,24 +180,49 @@ kind load docker-image gpu-telemetry-collector:latest --name gpu
 kind load docker-image gpu-telemetry-api:latest       --name gpu
 ```
 
+Or using the `Makefile`:
+
+```bash
+make load-images
+```
+
 ### 7. Install the Helm chart
+
+Now deploy all services (Postgres + MQ + streamer + collector + API) into the cluster:
 
 ```bash
 helm upgrade --install telemetry-pipeline ./helm/telemetry-pipeline
 kubectl get pods
 ```
 
+Helm:
+
+- Creates Deployments and Services for all components.
+- Sets environment variables correctly (Postgres DSN, MQ URLs, etc.).
+- Initializes the database schema (including TimescaleDB extension and hypertables).
+
 Wait until you see:
 
-- `telemetry-postgres` – database
+- `telemetry-postgres` – database (TimescaleDB)
 - `telemetry-mq` – message queue broker
 - `telemetry-streamer` – CSV streamer
 - `telemetry-collector` – collector
 - `telemetry-api` – HTTP API
 
-all in `Running` status.
+All in `Running` status.
+
+If any pod is in `CrashLoopBackOff`, look at its logs:
+
+```bash
+kubectl logs deploy/telemetry-postgres
+kubectl logs deploy/telemetry-streamer
+kubectl logs deploy/telemetry-collector
+kubectl logs deploy/telemetry-api
+```
 
 ### 8. Explore the API
+
+Expose the API service to your laptop:
 
 ```bash
 kubectl port-forward svc/telemetry-api 8080:80
@@ -127,6 +270,69 @@ At a high level, the system looks like this:
 - **Helm chart** (`helm/telemetry-pipeline`):
   - Deploys all components to Kubernetes (tested with kind).
   - Allows independent scaling of **streamer**, **collector**, and **mq-broker**.
+
+### Architecture Diagram
+
+The diagram below shows the main data flow from the CSV file through the system to the user:
+
+```mermaid
+flowchart LR
+    subgraph LocalFiles
+        CSV[DCGM CSV\n(dcgm_metrics_20250718_134233.csv)]
+    end
+
+    subgraph KubernetesCluster[kind \"gpu\" cluster]
+        subgraph DB[TimescaleDB (Postgres)]
+            PG[(telemetry table\n+ hypertable)]
+            SP[(stream_progress table)]
+        end
+
+        subgraph MQBroker[MQ Broker\ncmd/mqbroker]
+            MQQueue[InMemoryQueue\n(mq.InMemoryQueue)]
+        end
+
+        subgraph Streamers[Streamers\ncmd/streamer]
+            S1[streamer pod 1]
+            S2[streamer pod 2]
+        end
+
+        subgraph Collectors[Collectors\ncmd/collector]
+            C1[collector pod 1]
+            C2[collector pod 2]
+        end
+
+        subgraph APIService[API Gateway\ncmd/api]
+            API[/HTTP API\n(/api/v1/...)/]
+        end
+    end
+
+    User[You in browser\nSwagger UI] -->|HTTP/JSON| API
+    API -->|SQL queries| PG
+
+    CSV -->|read rows| S1
+    CSV -->|read rows| S2
+
+    S1 -->|reserve next_row\nvia SQL| SP
+    S2 -->|reserve next_row\nvia SQL| SP
+
+    S1 -->|publish telemetry\nmessages (HTTP)| MQQueue
+    S2 -->|publish telemetry\nmessages (HTTP)| MQQueue
+
+    MQQueue -->|consume messages\n(HTTP)| C1
+    MQQueue -->|consume messages\n(HTTP)| C2
+
+    C1 -->|INSERT telemetry\nrows| PG
+    C2 -->|INSERT telemetry\nrows| PG
+```
+
+Read this diagram as a **story**:
+
+1. The **streamer pods** read rows from the local DCGM CSV.
+2. Each streamer asks the database (`stream_progress` table) “what row should I process next?” so they **never duplicate work**.
+3. Each streamer turns that CSV row into a telemetry JSON message and sends it to the **MQ broker**.
+4. The **collector pods** pull messages from the MQ broker and write them into the **TimescaleDB telemetry table**.
+5. The **API** reads from the telemetry table and exposes clean HTTP endpoints for you.
+6. You use **Swagger UI** in your browser to explore and query that telemetry.
 
 ### Design Decisions and Rationale
 

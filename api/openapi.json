@@ -1,0 +1,141 @@
+{
+  "components": {
+    "schemas": {
+      "GPUInfo": {
+        "properties": {
+          "device": {
+            "type": "string"
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "uuid": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TelemetryRecord": {
+        "properties": {
+          "container": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "gpu_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "labels_raw": {
+            "type": "string"
+          },
+          "metric_name": {
+            "type": "string"
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "pod": {
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "uuid": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "GPU Telemetry API",
+    "version": "v1"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v1/gpus": {
+      "get": {
+        "description": "Return a list of all GPUs for which telemetry data is available, including uuid, device, and modelName.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GPUInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "List all GPUs"
+      }
+    },
+    "/api/v1/gpus/{id}/telemetry": {
+      "get": {
+        "description": "Return telemetry entries for a specific GPU, ordered by time. Optional start_time and end_time filters are supported.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Start of time window (inclusive), RFC3339 format",
+            "in": "query",
+            "name": "start_time",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "End of time window (inclusive), RFC3339 format",
+            "in": "query",
+            "name": "end_time",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TelemetryRecord"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Query telemetry by GPU"
+      }
+    }
+  }
+}

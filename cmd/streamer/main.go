@@ -17,6 +17,15 @@ import (
 	"github.com/varun6897/gpu/telemetry"
 )
 
+// RecordSource produces telemetry records from some underlying source.
+// Implementations decide how work is coordinated (CSV row indices, exporters,
+// Kafka partitions, etc.). The streamer loop only cares about this interface.
+type RecordSource interface {
+	// Next returns the next telemetry record, or an error. It should honour
+	// ctx for cancellation and may block while waiting for new data.
+	Next(ctx context.Context) (telemetry.Record, error)
+}
+
 func main() {
 	logger := log.New(os.Stdout, "[streamer] ", log.LstdFlags|log.Lmicroseconds|log.LUTC)
 
@@ -39,46 +48,30 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		logger.Fatalf("failed to ping postgres: %v", err)
 	}
-	if err := initStreamProgress(ctx, db, streamID); err != nil {
-		logger.Fatalf("failed to init stream_progress: %v", err)
-	}
 
-	// Load CSV into memory once; rows will be assigned by index from Postgres.
-	file, err := os.Open(csvPath)
+	// For now we only have a CSV+Postgres-backed RecordSource that uses
+	// stream_progress to coordinate work across pods. In the future, additional
+	// sources (e.g. exporters) can be plugged in by implementing RecordSource.
+	src, err := NewCSVIndexSource(ctx, db, streamID, csvPath)
 	if err != nil {
-		logger.Fatalf("failed to open CSV: %v", err)
+		logger.Fatalf("failed to create CSV source: %v", err)
 	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		logger.Fatalf("failed to read CSV: %v", err)
-	}
-	if len(records) <= 1 {
-		logger.Fatalf("CSV appears to have no data rows")
-	}
-	// Skip header row at index 0.
-	dataRows := records[1:]
 
 	queue := mq.NewHTTPQueue(mqBaseURL)
 
-	logger.Printf("starting streamer, CSV=%s, mq=%s, rows=%d, streamID=%s\n",
-		csvPath, mqBaseURL, len(dataRows), streamID)
+	logger.Printf("starting streamer, CSV=%s, mq=%s, streamID=%s\n",
+		csvPath, mqBaseURL, streamID)
 
 	// Use background context for steady-state run loop (DB already checked).
-	if err := runShared(context.Background(), db, streamID, dataRows, queue, time.Duration(sleepMillis)*time.Millisecond); err != nil {
+	if err := RunStreamer(context.Background(), src, queue, time.Duration(sleepMillis)*time.Millisecond); err != nil {
 		logger.Fatalf("streamer exited: %v", err)
 	}
 }
 
-// runShared loops forever, each time reserving the next row index from Postgres
-// and publishing the corresponding CSV row to the MQ. All streamer pods share
-// the same stream_progress row and thus have a single shared source of "next
-// work item".
-func runShared(ctx context.Context, db *sql.DB, streamID string, rows [][]string, queue mq.Queue, sleep time.Duration) error {
-	// rows contains only data rows (header removed).
-	n := int64(len(rows))
+// RunStreamer is the generic publish loop. It pulls telemetry records from the
+// provided RecordSource and publishes them to the MQ. This loop is agnostic to
+// where records come from (CSV, exporters, Kafka, etc.).
+func RunStreamer(ctx context.Context, src RecordSource, queue mq.Queue, sleep time.Duration) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -86,34 +79,19 @@ func runShared(ctx context.Context, db *sql.DB, streamID string, rows [][]string
 		default:
 		}
 
-		idx, err := nextRowIndex(ctx, db, streamID)
+		rec, err := src.Next(ctx)
 		if err != nil {
 			return err
 		}
-		row := rows[idx%n]
-
-		if len(row) < 12 {
-			continue
-		}
 
 		now := time.Now().UTC()
-		rec := telemetry.Record{
-			Timestamp:  now,
-			MetricName: row[1],
-			GPUId:      row[2],
-			Device:     row[3],
-			UUID:       row[4],
-			ModelName:  row[5],
-			Hostname:   row[6],
-			Container:  row[7],
-			Pod:        row[8],
-			Namespace:  row[9],
-			Value:      row[10],
-			LabelsRaw:  row[11],
+		if rec.Timestamp.IsZero() {
+			rec.Timestamp = now
 		}
 
 		payload, err := json.Marshal(rec)
 		if err != nil {
+			// Skip this record; JSON errors are unlikely but non-fatal.
 			continue
 		}
 
@@ -140,6 +118,84 @@ func runShared(ctx context.Context, db *sql.DB, streamID string, rows [][]string
 			}
 		}
 	}
+}
+
+// CSVIndexSource is a RecordSource implementation that:
+//   - Loads all CSV rows into memory once (minus the header).
+//   - Uses the shared Postgres stream_progress table to reserve a unique row
+//     index across all streamer pods.
+//   - Maps the reserved index into the in-memory rows slice (with modulo) to
+//     produce a telemetry.Record.
+type CSVIndexSource struct {
+	db       *sql.DB
+	streamID string
+	rows     [][]string // data rows, header already stripped
+}
+
+// NewCSVIndexSource constructs a CSVIndexSource by initialising the
+// stream_progress table (if needed) and loading the CSV file into memory.
+func NewCSVIndexSource(ctx context.Context, db *sql.DB, streamID, csvPath string) (*CSVIndexSource, error) {
+	if err := initStreamProgress(ctx, db, streamID); err != nil {
+		return nil, err
+	}
+
+	file, err := os.Open(csvPath)
+	if err != nil {
+		return nil, fmt.Errorf("open CSV: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("read CSV: %w", err)
+	}
+	if len(records) <= 1 {
+		return nil, fmt.Errorf("CSV appears to have no data rows")
+	}
+
+	// Strip header row at index 0.
+	dataRows := records[1:]
+
+	return &CSVIndexSource{
+		db:       db,
+		streamID: streamID,
+		rows:     dataRows,
+	}, nil
+}
+
+// Next reserves the next row index from Postgres and returns the corresponding
+// telemetry.Record. All streamer pods that share the same streamID and CSV
+// cooperate via the shared stream_progress row.
+func (s *CSVIndexSource) Next(ctx context.Context) (telemetry.Record, error) {
+	n := int64(len(s.rows))
+
+	idx, err := nextRowIndex(ctx, s.db, s.streamID)
+	if err != nil {
+		return telemetry.Record{}, err
+	}
+	row := s.rows[idx%n]
+
+	if len(row) < 12 {
+		// Skip malformed rows rather than failing the whole streamer.
+		return s.Next(ctx)
+	}
+
+	now := time.Now().UTC()
+	return telemetry.Record{
+		Timestamp:  now,
+		MetricName: row[1],
+		GPUId:      row[2],
+		Device:     row[3],
+		UUID:       row[4],
+		ModelName:  row[5],
+		Hostname:   row[6],
+		Container:  row[7],
+		Pod:        row[8],
+		Namespace:  row[9],
+		Value:      row[10],
+		LabelsRaw:  row[11],
+	}, nil
 }
 
 func initStreamProgress(ctx context.Context, db *sql.DB, streamID string) error {

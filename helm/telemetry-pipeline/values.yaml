@@ -38,7 +38,9 @@ collector:
   workers: 4
 
 postgres:
-  image: postgres:16
+  # Use TimescaleDB (built on PostgreSQL) for time-series telemetry storage.
+  # This image includes the TimescaleDB extension.
+  image: timescale/timescaledb:2.16.1-pg16
   username: gpu
   password: gpu-password
   database: gpu
