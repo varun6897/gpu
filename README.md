@@ -278,51 +278,51 @@ The diagram below shows the main data flow from the CSV file through the system 
 ```mermaid
 flowchart LR
     subgraph LocalFiles
-        CSV[DCGM CSV<br/>dcgm_metrics_20250718_134233.csv]
+        CSV[DCGM CSV]
     end
 
-    subgraph KubernetesCluster["kind gpu cluster"]
-        subgraph DB["TimescaleDB / Postgres"]
-            PG[(telemetry table<br/>+ hypertable)]
+    subgraph KubernetesCluster
+        subgraph DB
+            PG[(telemetry table)]
             SP[(stream_progress table)]
         end
 
-        subgraph MQBroker["MQ Broker<br/>cmd/mqbroker"]
-            MQQueue[InMemoryQueue<br/>mq.InMemoryQueue]
+        subgraph MQBroker
+            MQQueue[InMemoryQueue]
         end
 
-        subgraph Streamers["Streamers<br/>cmd/streamer"]
+        subgraph Streamers
             S1[streamer pod 1]
             S2[streamer pod 2]
         end
 
-        subgraph Collectors["Collectors<br/>cmd/collector"]
+        subgraph Collectors
             C1[collector pod 1]
             C2[collector pod 2]
         end
 
-        subgraph APIService["API Gateway<br/>cmd/api"]
-            API[/HTTP API<br/>/api/v1/.../]
+        subgraph APIService
+            API[HTTP API]
         end
     end
 
-    User[You in browser<br/>Swagger UI] -->|HTTP/JSON| API
-    API -->|SQL queries| PG
+    User[Browser / Swagger UI] --> API
+    API --> PG
 
-    CSV -->|read rows| S1
-    CSV -->|read rows| S2
+    CSV --> S1
+    CSV --> S2
 
-    S1 -->|reserve next_row via SQL| SP
-    S2 -->|reserve next_row via SQL| SP
+    S1 --> SP
+    S2 --> SP
 
-    S1 -->|publish telemetry messages (HTTP)| MQQueue
-    S2 -->|publish telemetry messages (HTTP)| MQQueue
+    S1 --> MQQueue
+    S2 --> MQQueue
 
-    MQQueue -->|consume messages (HTTP)| C1
-    MQQueue -->|consume messages (HTTP)| C2
+    MQQueue --> C1
+    MQQueue --> C2
 
-    C1 -->|INSERT telemetry rows| PG
-    C2 -->|INSERT telemetry rows| PG
+    C1 --> PG
+    C2 --> PG
 ```
 
 Read this diagram as a **story**:
