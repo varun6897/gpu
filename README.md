@@ -312,17 +312,17 @@ flowchart LR
     CSV -->|read rows| S1
     CSV -->|read rows| S2
 
-    S1 -->|reserve next_row\nvia SQL| SP
-    S2 -->|reserve next_row\nvia SQL| SP
+    S1 -->|reserve next_row via SQL| SP
+    S2 -->|reserve next_row via SQL| SP
 
-    S1 -->|publish telemetry\nmessages (HTTP)| MQQueue
-    S2 -->|publish telemetry\nmessages (HTTP)| MQQueue
+    S1 -->|publish telemetry messages (HTTP)| MQQueue
+    S2 -->|publish telemetry messages (HTTP)| MQQueue
 
-    MQQueue -->|consume messages\n(HTTP)| C1
-    MQQueue -->|consume messages\n(HTTP)| C2
+    MQQueue -->|consume messages (HTTP)| C1
+    MQQueue -->|consume messages (HTTP)| C2
 
-    C1 -->|INSERT telemetry\nrows| PG
-    C2 -->|INSERT telemetry\nrows| PG
+    C1 -->|INSERT telemetry rows| PG
+    C2 -->|INSERT telemetry rows| PG
 ```
 
 Read this diagram as a **story**:
